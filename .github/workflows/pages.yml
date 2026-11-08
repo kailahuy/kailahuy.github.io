@@ -1,0 +1,49 @@
+name: Publish Tested Dreams Web
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dreams-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Require a tested artifact and working public API
+        env:
+          PAGES_WEB_ORIGIN: https://kailahuy.github.io
+        run: |
+          node --input-type=module -e '
+          import fs from "node:fs";
+          const manifest = JSON.parse(fs.readFileSync("site/release.json", "utf8"));
+          const api = new URL(manifest.apiBaseUrl);
+          if (manifest.schemaVersion !== 1 || api.protocol !== "https:" || api.username || api.password || api.hostname === "localhost" || !manifest.commit) throw new Error("Invalid tested release artifact");
+          const ready = await fetch(api.origin + "/ready", {headers:{Origin:process.env.PAGES_WEB_ORIGIN},signal:AbortSignal.timeout(90000)});
+          const state = await ready.json();
+          if (!ready.ok || state.status !== "ready" || state.checks?.database !== "ok" || state.checks?.migrations !== "ok") throw new Error("API is not ready");
+          const origin = ready.headers.get("access-control-allow-origin");
+          if (origin !== process.env.PAGES_WEB_ORIGIN && origin !== "*") throw new Error("Public CORS is not configured");'
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+      - name: Publish verified artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
